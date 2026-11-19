@@ -3,10 +3,9 @@
 'require fs';
 'require rpc';
 
-/* Read-only collectors. Select once per page: nlbwmon first, then existing nft
- * counters. A selected collector's failure must never silently change sources. */
+/* Only query the configured read-only collector. Existing installations use nlbwmon. */
 const callConfig = rpc.declare({ object: 'uci', method: 'get', params: ['config'], expect: { values: {} } });
-let config = null, configAt = 0, selected = null, retryAt = 0;
+let config = null, configAt = 0;
 
 function interval(values) {
 	const sections = Object.values(values || {}).filter((s) => s && s['.type'] === 'nlbwmon');
@@ -26,11 +25,7 @@ async function nlbwSample() {
 	const seconds = interval(config);
 	if (seconds == null) return null;
 	const result = await fs.exec_direct('/usr/sbin/nlbw', ['-c', 'json', '-g', 'mac', '-n'], 'json');
-	if (!result || !Array.isArray(result.columns) || !Array.isArray(result.data)) return null;
-	const fields = ['mac', 'rx_bytes', 'tx_bytes'].map((key) => result.columns.indexOf(key));
-	if (fields.some((i) => i < 0) || result.data.some((row) => !Array.isArray(row) ||
-		fields.slice(1).some((i) => !Number.isSafeInteger(row[i]) || row[i] < 0))) return null;
-	return { source: 'nlbwmon', interval: seconds, columns: result.columns, data: result.data };
+	return { source: 'nlbwmon', interval: seconds, columns: result && result.columns, data: result && result.data };
 }
 
 async function nftSample() {
@@ -62,18 +57,7 @@ async function nftSample() {
 }
 
 return baseclass.extend({
-	async read() {
-		if (selected) return selected();
-		if (Date.now() < retryAt) return null;
-		for (const read of [nlbwSample, nftSample]) {
-			try {
-				const sample = await read();
-				if (sample) { selected = read; return sample; }
-			} catch (e) { /* Unavailable during discovery: try the next collector. */ }
-		}
-		// Failed discovery is independent of either collector's sampling interval.
-		config = null;
-		retryAt = Date.now() + 60000;
-		return null;
+	read(source) {
+		return source === 'nftables' ? nftSample() : nlbwSample();
 	}
 });

@@ -38,41 +38,37 @@ test('nlbwmon is preferred, follows collector cadence and never probes nft when 
 	}
 });
 
-test('absent, invalid or unreadable nlbwmon config falls back to existing nft counters', async () => {
-	for (const config of [{}, { cfg: { '.type': 'nlbwmon', refresh_interval: '0' } },
-		{ cfg: { '.type': 'nlbwmon', refresh_interval: '30;reboot' } },
-		{ a: { '.type': 'nlbwmon' }, b: { '.type': 'nlbwmon' } }, new Error('UCI unavailable')]) {
-		const f = load({ config, nft: validNft() });
-		assert.equal((await f.subject.read()).source, 'nftables');
-		assert.equal(f.calls.some((c) => c[1] === '/usr/sbin/nlbw'), false);
+test('missing or invalid source and absent nlbwmon never probe nft', async () => {
+	for (const source of [undefined, '', 'auto', 'nlbwmon']) {
+		const f = load({ nft: validNft() });
+		assert.equal(await f.subject.read(source), null);
+		assert.deepEqual(plain(f.calls), [['uci', 'get', 'nlbwmon']]);
 	}
 });
 
-test('initial nlbwmon command failure or malformed data allows nft fallback', async () => {
-	for (const nlbw of [new Error('not running'), null, {}, { columns: [], data: [] },
-		{ ...empty, data: [['00:11:22:33:44:55', -1, 0]] }, { ...empty, data: [null] }]) {
-		const f = load({ config: { cfg: { '.type': 'nlbwmon' } }, nlbw, nft: validNft() });
-		assert.equal((await f.subject.read()).source, 'nftables');
-	}
+test('nlbwmon preserves mixed device and placeholder rows for the existing rate tracker', async () => {
+	const rows = [['00:00:00:00:00:00', null, null], ['00:11:22:33:44:55', 100, 200]];
+	const f = load({ config: { cfg: { '.type': 'nlbwmon' } }, nlbw: { ...empty, data: rows } });
+	assert.deepEqual(plain((await f.subject.read()).data), rows);
 });
 
 test('nft counter read maps directions and tracks object identities per device', async () => {
 	const nft = validNft();
 	nft.nftables.push({ metainfo: {} }, counter('up', 999, { table: 'other' }), counter('up', 999, { name: 'unrelated' }));
 	const f = load({ nft });
-	const sample = await f.subject.read();
+	const sample = await f.subject.read('nftables');
 	assert.equal(sample.interval, 5);
 	assert.equal(sample.source, 'nftables');
 	assert.deepEqual(plain(sample.columns), ['mac', 'rx_bytes', 'tx_bytes', 'identity']);
 	assert.deepEqual(plain(sample.data), [['00:11:22:33:44:55', 343000000, 1234, '[2,1]']]);
 	nft.nftables.reverse();
-	assert.deepEqual(plain((await f.subject.read()).data), plain(sample.data));
+	assert.deepEqual(plain((await f.subject.read('nftables')).data), plain(sample.data));
 	nft.nftables.find((e) => e.counter?.name === 'carbon_down_001122334455').counter.handle = 9;
-	const next = await f.subject.read();
+	const next = await f.subject.read('nftables');
 	assert.equal(next.source, sample.source);
 	assert.equal(next.data[0][3], '[9,1]');
-	assert.deepEqual(plain(f.calls[1]), ['exec', '/usr/sbin/nft', ['-j', 'list', 'counters', 'table', 'inet', 'carbon_acct'], 'json']);
-	assert.equal(f.calls.filter((c) => c[0] === 'uci').length, 1);
+	assert.deepEqual(plain(f.calls[0]), ['exec', '/usr/sbin/nft', ['-j', 'list', 'counters', 'table', 'inet', 'carbon_acct'], 'json']);
+	assert.equal(f.calls.filter((c) => c[0] === 'uci').length, 0);
 });
 
 test('empty, incomplete, duplicate and invalid nft counters cannot select a source', async () => {
@@ -80,39 +76,20 @@ test('empty, incomplete, duplicate and invalid nft counters cannot select a sour
 		{ nftables: [counter('up', -1), counter('down', 20)] },
 		{ nftables: [counter('up', Number.MAX_SAFE_INTEGER + 1), counter('down', 20)] },
 		{ nftables: [counter('up', 1), counter('up', 2), counter('down', 20)] }]) {
-		assert.equal(await load({ nft }).subject.read(), null);
+		assert.equal(await load({ nft }).subject.read('nftables'), null);
 	}
 	const nft = validNft();
 	nft.nftables.push(counter('up', -1, { name: 'carbon_up_001122334466' }));
-	assert.equal((await load({ nft }).subject.read()).data.length, 1, 'one bad device does not hide others');
+	assert.equal((await load({ nft }).subject.read('nftables')).data.length, 1, 'one bad device does not hide others');
 });
 
-test('failed discovery retries after a minute even with a configured one-hour nlbw interval', async () => {
-	let time = 0, nft = new Error('no table');
-	const f = load({ config: { cfg: { '.type': 'nlbwmon', refresh_interval: '1h' } },
-		nlbw: new Error('not running'), nft: () => nft, now: () => time });
-	assert.equal(await f.subject.read(), null);
-	const count = f.calls.length;
-	nft = validNft();
-	time = 59000;
-	assert.equal(await f.subject.read(), null);
-	assert.equal(f.calls.length, count);
-	time = 60000;
-	assert.equal((await f.subject.read()).source, 'nftables');
-});
-
-test('selected nft stays selected across failures and later nlbwmon availability', async () => {
-	let config = {}, nft = validNft();
-	const f = load({ config: () => config, nft: () => nft });
-	assert.equal((await f.subject.read()).source, 'nftables');
-	config = { cfg: { '.type': 'nlbwmon' } };
-	nft = new Error('temporary failure');
-	await assert.rejects(f.subject.read(), /temporary failure/);
-	nft = { nftables: [] };
-	assert.equal(await f.subject.read(), null);
-	nft = validNft();
-	assert.equal((await f.subject.read()).source, 'nftables');
-	assert.equal(f.calls.some((c) => c[1] === '/usr/sbin/nlbw'), false);
+test('explicit nftables queries only nft even when nlbwmon is available', async () => {
+	let nft = validNft();
+	const f = load({ config: { cfg: { '.type': 'nlbwmon' } }, nft: () => nft });
+	assert.equal((await f.subject.read('nftables')).source, 'nftables');
+	nft = new Error('no table');
+	await assert.rejects(f.subject.read('nftables'), /no table/);
+	assert.ok(f.calls.every((c) => c[0] === 'exec' && c[1] === '/usr/sbin/nft'));
 });
 
 test('selected nlbwmon failure does not switch to nft counters', async () => {

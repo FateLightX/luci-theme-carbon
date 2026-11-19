@@ -2,11 +2,9 @@
 
 ## 中文
 
-Carbon 首次检测时优先读取已有 nlbwmon，遵循其采集周期（默认通常 30 秒）。配置缺失、命令失败或返回数据不可用时，再尝试 nftables 的 `inet carbon_acct` 表中的命名计数器，每 5 秒计算一次字节差分。至少存在一组有效的上下行计数器才选用 nftables；两者都不可用时保留设备列表，不显示有效网速，约一分钟后重新检测。
+默认使用 `nlbwmon`，按其采集周期读取数据（通常 30 秒）。即使采集服务不可用，Carbon 也不会探测 nftables。要使用 nftables，请先按下例配置并验证计数器，再到 **系统 → Carbon 主题** 选择 **nftables**，保存后重新打开概览。恢复默认时，在同一位置选择 **nlbwmon**。
 
-不增加设置项。设备卡片显示实际来源，例如“设备网速 · nftables · 近 5 秒平均”。选定来源后，本页内保持不变；读取失败显示“不可用”，约一分钟后重试同一来源，不混用另一来源的累计值。刷新页面会重新按 nlbwmon 优先的顺序检测，安装或修改采集服务后可刷新生效。即使 nlbwmon 采集周期很长，读取失败时仍按一分钟重试。
-
-这是对已有采集规则的兼容支持，不代表 [issue 10](https://github.com/mrjoechen/luci-theme-carbon/issues/10) 的漏算原因已确认。nlbwmon 能正常返回数据但本身统计不准时，自动检测无法判断其准确性，也不会改用 nftables。主题不自动创建规则、不修改防火墙和流量卸载设置。
+选择 nftables 后，Carbon 每 5 秒读取 `inet carbon_acct` 表中的命名计数器，以相邻两次读数的字节差计算平均网速。所选来源不可用时，设备列表仍可使用，Carbon 只重试该来源。主题不会创建规则或修改防火墙及流量卸载设置。
 
 ### 配置示例
 
@@ -15,7 +13,7 @@ Carbon 首次检测时优先读取已有 nlbwmon，遵循其采集周期（默�
 - `carbon_up_001122334455`：设备上传字节数，匹配源 IP。
 - `carbon_down_001122334455`：设备下载字节数，匹配目的 IP。
 
-MAC 使用 12 位小写十六进制，不带冒号。计数器本身位于 `inet carbon_acct` 表，规则通过 `counter name` 引用。已有同名表时请修改现有配置，不要重复创建或叠加计数规则。
+MAC 使用 12 位小写十六进制，不带冒号。计数器本身位于 `inet carbon_acct` 表，规则通过 `counter name` 引用。如果已有规则使用匿名 `counter`，请先在现有表中声明上述两个命名计数器，再将上下行规则中的 `counter` 分别替换为对应的 `counter name …`。仅将表命名为 `carbon_acct` 无法识别匿名计数器。请勿叠加重复规则；迁移后的首次采样会重新建立基线。
 
 ```nft
 table inet carbon_acct {
@@ -61,13 +59,11 @@ nft -j list counters table inet carbon_acct
 
 ## English
 
-Carbon first tries an existing nlbwmon collector at its configured interval (normally 30 seconds). If its configuration, command or response is unavailable during initial discovery, Carbon tries named counters in the `inet carbon_acct` nftables table at a five-second interval. At least one valid upload/download pair is required. If neither source is available, discovery retries after about one minute and the device list stays usable without speed readings.
+Carbon uses `nlbwmon` by default and follows its configured collection interval (normally 30 seconds). It never probes nftables in this mode, even if `nlbwmon` is unavailable. To use nftables, configure and verify the counters as described below, then select **nftables** under **System → Carbon Theme Settings**, save the setting and reopen the overview. Select **nlbwmon** in the same place to switch back.
 
-No settings control is added. The device card shows the actual source. Once selected, that source remains fixed for this page: a failed read shows unavailable and retries the same source after about one minute, regardless of its normal sampling interval. Reloading the page repeats discovery with nlbwmon first. This also lets newly installed collectors take effect. A successful nlbwmon response cannot reveal whether its accounting is accurate, so inaccurate totals do not trigger fallback.
+In nftables mode, Carbon reads named counters in `inet carbon_acct` every five seconds and calculates average speeds from the difference between successive byte counts. If the selected source is unavailable, the device list stays usable and Carbon retries only that source. Carbon only reads counters and leaves firewall and offload settings to the administrator.
 
-This supports existing collectors; it does not establish the cause of issue 10. Carbon only reads counters and does not install rules or alter firewall/offload settings.
-
-The nft configuration above uses two named counters per device: `carbon_up_<mac>` and `carbon_down_<mac>`, where `<mac>` is twelve lowercase hex digits without separators. Replace both the MAC and example IPv4/IPv6 addresses with the actual device values. Upload rules match source addresses; download rules match destination addresses. IPv4 and IPv6 rules may share the same named counter. Use stable leases and keep rules current as addresses change. Existing anonymous counters in a table named `carbon_acct` must be adapted to reference these named counters.
+The nft configuration above uses two named counters per device: `carbon_up_<mac>` and `carbon_down_<mac>`, where `<mac>` is twelve lowercase hex digits without separators. Replace both the MAC and example IPv4/IPv6 addresses with the actual device values. Upload rules match source addresses; download rules match destination addresses. IPv4 and IPv6 rules may share the same named counter. Use stable leases and keep rules current as addresses change. To migrate anonymous counters, declare the named pair in the existing table and replace each inline `counter` with the matching `counter name …` reference. The table name alone cannot identify anonymous counters. The first reading after migration establishes a new baseline.
 
 Use a JSON-capable `nft` binary (typically OpenWrt's `nftables-json` package). Save the full table definition, for example to `/etc/carbon-acct.nft`, check it with `nft -c -f`, then load it with `nft -f`, as shown above. Adapt an existing table instead of adding overlapping rules. The fixed read command is `nft -j list counters table inet carbon_acct`. After a theme upgrade, restart rpcd and log in again if its ACL rejects this query.
 
@@ -75,4 +71,4 @@ Loading a file affects the running kernel only. Persistence requires the firmwar
 
 The example counts forwarded traffic, including routed LAN-to-LAN traffic. Restrict rules to the actual WAN interfaces if internet-only totals are desired. Avoid overlapping matches for the same direction. Software/hardware flow offload can bypass the forward chain: disable relevant offloading when complete accounting is required, and evaluate CPU/throughput impact. Same-bridge traffic, router input/output and traffic through other gateways are outside this example's scope.
 
-Once nftables is selected, nlbwmon totals are not mixed into it, even for devices without corresponding counters. Devices without both directions show `—`; counters never add discovered devices. Initial samples, source switches, detectable counter recreation and decreasing totals establish a fresh baseline. A reset followed by enough traffic to exceed the previous value between reads cannot be detected from totals alone; reload the page after managing rules to establish a fresh baseline. Without nftables configuration, the original nlbwmon undercount remains possible.
+Once nftables is selected, nlbwmon totals are not mixed into it, even for devices without corresponding counters. Devices without both directions show `—`; counters never add discovered devices. Initial samples, source switches, detectable counter recreation and decreasing totals establish a fresh baseline. A reset followed by enough traffic to exceed the previous value between reads cannot be detected from totals alone; reload the page after managing rules to establish a fresh baseline.

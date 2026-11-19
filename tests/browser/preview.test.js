@@ -199,12 +199,12 @@ test('device speeds preserve leases, handle missing data and pause when hidden',
 	} finally { await context.close(); }
 });
 
-test('default preview identifies nlbwmon in the device card', async () => {
+test('default preview preserves the original device speed label', async () => {
 	const { page, context, errors } = await open('/src/preview/index.html?lang=zh-Hans');
 	try {
 		await dashboardReady(page);
-		await page.waitForFunction(() => document.querySelector('.cb-device-rate-note')?.textContent.includes('nlbwmon'));
-		assert.match(await page.textContent('.cb-device-rate-note'), /^设备网速 · nlbwmon · /);
+		await page.waitForFunction(() => document.querySelector('.cb-device-rate-note:not(.hidden)')?.textContent.startsWith('设备网速'));
+		assert.match(await page.textContent('.cb-device-rate-note'), /^设备网速 · (?!nlbwmon|nftables)/);
 		assert.deepEqual(errors, []);
 	} finally { await context.close(); }
 });
@@ -516,7 +516,7 @@ test('settings page: buttons, links, fields and status text share one centre lin
 		const { page, context, errors } = await open('/src/tests/fixtures/settings.html', { width });
 		await page.waitForSelector('body[data-ready]');
 		/* a status message next to the mirror field, as after saving */
-		await page.evaluate(() => { document.querySelector('.cb-update-field .cb-update-note').textContent = '已保存。'; });
+		await page.evaluate(() => { document.querySelector('#carbon-mirror').closest('.cb-update-field').querySelector('.cb-update-note').textContent = '已保存。'; });
 		const rows = await page.evaluate(() => [...document.querySelectorAll('.cb-update-actions, .cb-logo-actions, .cb-update-field')].map((row) => {
 			const kids = [...row.children].filter((c) => c.offsetParent && c.getBoundingClientRect().width);
 			/* compare items on the same line only (rows may wrap on phones) */
@@ -528,7 +528,7 @@ test('settings page: buttons, links, fields and status text share one centre lin
 			});
 			return { row: row.className, spread: Math.max(...Object.values(lines).map((m) => Math.max(...m) - Math.min(...m))) };
 		}));
-		assert.equal(rows.length, 3, JSON.stringify(rows));
+		assert.equal(rows.length, 4, JSON.stringify(rows));
 		const stray = await page.evaluate(() => [...document.querySelectorAll('#view *')].flatMap((el) => [...el.childNodes])
 			.filter((n) => n.nodeType === 3 && /^(null|undefined)$/.test(n.textContent.trim())).length);
 		assert.equal(stray, 0, 'no "null" / "undefined" text from absent children');

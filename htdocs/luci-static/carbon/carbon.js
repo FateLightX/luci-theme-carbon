@@ -1949,7 +1949,7 @@
 				st.rateData = deviceRates.update(document.hidden ? null : sample, now);
 				if (st.rateData) {
 					st.rateSeen = true;
-					st.rateSource = ['nlbwmon', 'nftables'].includes(st.rateData.source) ? st.rateData.source : '';
+					st.rateSource = st.rateData.source === 'nftables' ? 'nftables' : '';
 				}
 				st.rateNext = now + (st.rateData ? st.rateData.interval : 60) * 1000;
 				renderDeviceRates();

@@ -106,6 +106,17 @@ test('counter reset, missing device, failed read, suspend and changed interval d
 	assert.equal(tracker.update(sample(Number.MAX_SAFE_INTEGER + 1), 550000), null);
 });
 
+test('invalid placeholder MAC does not discard a valid device rate', () => {
+	const tracker = new (load().DeviceRates)();
+	const mac = '00:11:22:33:44:55';
+	const sample = (n) => ({ interval: 5, columns: ['mac', 'rx_bytes', 'tx_bytes'],
+		data: [['00:00:00:00:00:00', null, null], [mac, n, n * 2]] });
+	tracker.update(sample(100), 0);
+	const rate = tracker.update(sample(200), 5000).rates.get(mac);
+	assert.equal(rate.down, 20);
+	assert.equal(rate.up, 40);
+});
+
 test('switching accounting sources with identical cadence resets unrelated byte totals', () => {
 	const tracker = new (load().DeviceRates)();
 	const sample = (source, n) => ({ source, interval: 5, columns: ['mac', 'rx_bytes', 'tx_bytes'],
