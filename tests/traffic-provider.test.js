@@ -4,23 +4,33 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('htdocs/luci-static/resources/carbon/traffic.js', 'utf8');
+const empty = { columns: ['mac', 'rx_bytes', 'tx_bytes'], data: [] };
+const plain = (x) => JSON.parse(JSON.stringify(x));
 
-function load(values, result = { columns: ['mac', 'rx_bytes', 'tx_bytes'], data: [] }) {
+function load({ config = {}, nlbw = empty, nft = new Error('no table'), now = Date.now } = {}) {
 	const calls = [];
+	const resolve = (v) => { v = typeof v === 'function' ? v() : v; if (v instanceof Error) throw v; return v; };
 	const subject = vm.runInNewContext('(function() {\n' + source + '\n})()', {
-		baseclass: { extend: (x) => x },
-		rpc: { declare: (spec) => async (...args) => { calls.push([spec.object, spec.method, ...args]); return values; } },
-		fs: { exec_direct: async (...args) => { calls.push(['exec', ...args]); if (result instanceof Error) throw result; return result; } }
+		Date: { now }, baseclass: { extend: (x) => x },
+		rpc: { declare: (spec) => async (...args) => { calls.push([spec.object, spec.method, ...args]); return resolve(config); } },
+		fs: { exec_direct: async (...args) => { calls.push(['exec', ...args]); return resolve(args[0] === '/usr/sbin/nft' ? nft : nlbw); } }
 	});
 	return { subject, calls };
 }
+function counter(direction, bytes, extra = {}) {
+	return { counter: { family: 'inet', table: 'carbon_acct', name: 'carbon_' + direction + '_001122334455',
+		bytes, packets: 100, handle: direction === 'up' ? 1 : 2, ...extra } };
+}
+const validNft = () => ({ nftables: [counter('up', 1234), counter('down', 343000000)] });
 
-test('traffic adapter follows the collector cadence and only invokes the fixed read command', async () => {
+test('nlbwmon is preferred, follows collector cadence and never probes nft when available', async () => {
 	for (const [input, expected] of [['30s', 30], ['2m', 120], ['1', 5], [undefined, 30]]) {
-		const f = load({ config: { '.type': 'nlbwmon', refresh_interval: input } });
-		assert.equal((await f.subject.read()).interval, expected);
+		const f = load({ config: { cfg: { '.type': 'nlbwmon', refresh_interval: input } }, nft: validNft() });
+		const sample = await f.subject.read();
+		assert.equal(sample.interval, expected);
+		assert.equal(sample.source, 'nlbwmon');
 		await f.subject.read();
-		assert.deepEqual(JSON.parse(JSON.stringify(f.calls)), [
+		assert.deepEqual(plain(f.calls), [
 			['uci', 'get', 'nlbwmon'],
 			['exec', '/usr/sbin/nlbw', ['-c', 'json', '-g', 'mac', '-n'], 'json'],
 			['exec', '/usr/sbin/nlbw', ['-c', 'json', '-g', 'mac', '-n'], 'json']
@@ -28,27 +38,100 @@ test('traffic adapter follows the collector cadence and only invokes the fixed r
 	}
 });
 
-test('missing, ambiguous or invalid collector configuration never starts a command', async () => {
-	for (const config of [{}, { one: { '.type': 'nlbwmon', refresh_interval: '0' } },
-		{ one: { '.type': 'nlbwmon', refresh_interval: '30;reboot' } },
-		{ one: { '.type': 'nlbwmon' }, two: { '.type': 'nlbwmon' } }]) {
-		const f = load(config);
-		assert.equal(await f.subject.read(), null);
-		assert.equal(f.calls.length, 1);
+test('absent, invalid or unreadable nlbwmon config falls back to existing nft counters', async () => {
+	for (const config of [{}, { cfg: { '.type': 'nlbwmon', refresh_interval: '0' } },
+		{ cfg: { '.type': 'nlbwmon', refresh_interval: '30;reboot' } },
+		{ a: { '.type': 'nlbwmon' }, b: { '.type': 'nlbwmon' } }, new Error('UCI unavailable')]) {
+		const f = load({ config, nft: validNft() });
+		assert.equal((await f.subject.read()).source, 'nftables');
+		assert.equal(f.calls.some((c) => c[1] === '/usr/sbin/nlbw'), false);
 	}
 });
 
-test('unavailable collector is propagated for the dashboard to handle without changing configuration', async () => {
-	const f = load({ cfg: { '.type': 'nlbwmon' } }, new Error('not running'));
-	await assert.rejects(f.subject.read(), /not running/);
-	assert.equal(f.calls.length, 2);
+test('initial nlbwmon command failure or malformed data allows nft fallback', async () => {
+	for (const nlbw of [new Error('not running'), null, {}, { columns: [], data: [] },
+		{ ...empty, data: [['00:11:22:33:44:55', -1, 0]] }, { ...empty, data: [null] }]) {
+		const f = load({ config: { cfg: { '.type': 'nlbwmon' } }, nlbw, nft: validNft() });
+		assert.equal((await f.subject.read()).source, 'nftables');
+	}
 });
 
-test('traffic permissions grant only the fixed counter read and read-only collector configuration', () => {
+test('nft counter read maps directions and tracks object identities per device', async () => {
+	const nft = validNft();
+	nft.nftables.push({ metainfo: {} }, counter('up', 999, { table: 'other' }), counter('up', 999, { name: 'unrelated' }));
+	const f = load({ nft });
+	const sample = await f.subject.read();
+	assert.equal(sample.interval, 5);
+	assert.equal(sample.source, 'nftables');
+	assert.deepEqual(plain(sample.columns), ['mac', 'rx_bytes', 'tx_bytes', 'identity']);
+	assert.deepEqual(plain(sample.data), [['00:11:22:33:44:55', 343000000, 1234, '[2,1]']]);
+	nft.nftables.reverse();
+	assert.deepEqual(plain((await f.subject.read()).data), plain(sample.data));
+	nft.nftables.find((e) => e.counter?.name === 'carbon_down_001122334455').counter.handle = 9;
+	const next = await f.subject.read();
+	assert.equal(next.source, sample.source);
+	assert.equal(next.data[0][3], '[9,1]');
+	assert.deepEqual(plain(f.calls[1]), ['exec', '/usr/sbin/nft', ['-j', 'list', 'counters', 'table', 'inet', 'carbon_acct'], 'json']);
+	assert.equal(f.calls.filter((c) => c[0] === 'uci').length, 1);
+});
+
+test('empty, incomplete, duplicate and invalid nft counters cannot select a source', async () => {
+	for (const nft of [{}, { nftables: [] }, { nftables: [counter('up', 20)] },
+		{ nftables: [counter('up', -1), counter('down', 20)] },
+		{ nftables: [counter('up', Number.MAX_SAFE_INTEGER + 1), counter('down', 20)] },
+		{ nftables: [counter('up', 1), counter('up', 2), counter('down', 20)] }]) {
+		assert.equal(await load({ nft }).subject.read(), null);
+	}
+	const nft = validNft();
+	nft.nftables.push(counter('up', -1, { name: 'carbon_up_001122334466' }));
+	assert.equal((await load({ nft }).subject.read()).data.length, 1, 'one bad device does not hide others');
+});
+
+test('failed discovery retries after a minute even with a configured one-hour nlbw interval', async () => {
+	let time = 0, nft = new Error('no table');
+	const f = load({ config: { cfg: { '.type': 'nlbwmon', refresh_interval: '1h' } },
+		nlbw: new Error('not running'), nft: () => nft, now: () => time });
+	assert.equal(await f.subject.read(), null);
+	const count = f.calls.length;
+	nft = validNft();
+	time = 59000;
+	assert.equal(await f.subject.read(), null);
+	assert.equal(f.calls.length, count);
+	time = 60000;
+	assert.equal((await f.subject.read()).source, 'nftables');
+});
+
+test('selected nft stays selected across failures and later nlbwmon availability', async () => {
+	let config = {}, nft = validNft();
+	const f = load({ config: () => config, nft: () => nft });
+	assert.equal((await f.subject.read()).source, 'nftables');
+	config = { cfg: { '.type': 'nlbwmon' } };
+	nft = new Error('temporary failure');
+	await assert.rejects(f.subject.read(), /temporary failure/);
+	nft = { nftables: [] };
+	assert.equal(await f.subject.read(), null);
+	nft = validNft();
+	assert.equal((await f.subject.read()).source, 'nftables');
+	assert.equal(f.calls.some((c) => c[1] === '/usr/sbin/nlbw'), false);
+});
+
+test('selected nlbwmon failure does not switch to nft counters', async () => {
+	let nlbw = empty;
+	const f = load({ config: { cfg: { '.type': 'nlbwmon' } }, nlbw: () => nlbw, nft: validNft() });
+	assert.equal((await f.subject.read()).source, 'nlbwmon');
+	nlbw = new Error('temporary failure');
+	await assert.rejects(f.subject.read(), /temporary failure/);
+	nlbw = empty;
+	assert.equal((await f.subject.read()).source, 'nlbwmon');
+	assert.equal(f.calls.some((c) => c[1] === '/usr/sbin/nft'), false);
+});
+
+test('traffic permissions grant only fixed counter reads and read-only collector configuration', () => {
 	const acl = JSON.parse(fs.readFileSync('root/usr/share/rpcd/acl.d/luci-theme-carbon.json'))['luci-theme-carbon'];
 	assert.deepEqual(acl.read.file['/usr/sbin/nlbw -c json -g mac -n'], ['exec']);
+	assert.deepEqual(acl.read.file['/usr/sbin/nft -j list counters table inet carbon_acct'], ['exec']);
 	assert.deepEqual(Object.entries(acl.read.file).filter(([, rights]) => rights.includes('exec')).map(([name]) => name),
-		['/usr/sbin/nlbw -c json -g mac -n']);
+		['/usr/sbin/nlbw -c json -g mac -n', '/usr/sbin/nft -j list counters table inet carbon_acct']);
 	assert.ok(acl.read.uci.includes('nlbwmon'));
 	assert.deepEqual(acl.write.uci, ['luci']);
 });

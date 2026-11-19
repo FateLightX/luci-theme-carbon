@@ -145,7 +145,7 @@ test('device speeds preserve leases, handle missing data and pause when hidden',
 			window.CarbonPreview.provider.deviceTraffic = async () => {
 				window.trafficReads++;
 				if (window.trafficFail) throw new Error('collector unavailable');
-				return { interval: 5, columns: ['mac', 'rx_bytes', 'tx_bytes'], data: [
+				return { source: 'nftables', interval: 5, columns: ['mac', 'rx_bytes', 'tx_bytes'], data: [
 					['A6:83:E7:2C:91:0F', window.trafficReads * 10240, window.trafficReads * 5120],
 					['00:11:22:33:44:99', 99999999, 99999999]
 				] };
@@ -158,6 +158,7 @@ test('device speeds preserve leases, handle missing data and pause when hidden',
 		const laptop = page.locator('.cb-clients li').filter({ hasText: 'MacBook-Air' });
 		assert.match(await phone.textContent(), /DHCP lease · 10h 33m left/);
 		assert.equal(await phone.locator('.cb-device-rates').textContent(), '↓ —↑ —');
+		assert.equal(await page.textContent('.cb-device-rate-note'), 'Device speeds · nftables · Waiting for next sample');
 		const count = await page.textContent('.cb-count');
 		await page.clock.runFor(5100);
 		assert.match(await phone.locator('.cb-device-rates').textContent(), /↓ [\d.]+ KB\/s↑ [\d.]+ [KB]+\/s/);
@@ -184,11 +185,27 @@ test('device speeds preserve leases, handle missing data and pause when hidden',
 		await page.evaluate(() => { window.trafficFail = true; });
 		await page.clock.runFor(5000);
 		assert.equal(await phone.locator('.cb-device-rates').textContent(), '↓ —↑ —');
-		assert.match(await page.textContent('.cb-device-rate-note'), /Unavailable/);
+		assert.equal(await page.textContent('.cb-device-rate-note'), 'Device speeds · nftables · Unavailable');
 		const failedReads = await page.evaluate(() => window.trafficReads);
 		await page.clock.runFor(55000);
 		assert.equal(await page.evaluate(() => window.trafficReads), failedReads, 'failed sources back off for a minute');
 		assert.match(await phone.textContent(), /DHCP lease/);
+		await page.evaluate(() => { window.trafficFail = false; });
+		await page.clock.runFor(5000);
+		assert.equal(await phone.locator('.cb-device-rates').textContent(), '↓ —↑ —');
+		await page.clock.runFor(5000);
+		assert.match(await phone.locator('.cb-device-rates').textContent(), /KB\/s/);
+		assert.match(await page.textContent('.cb-device-rate-note'), /^Device speeds · nftables · \d+ s average$/);
+	} finally { await context.close(); }
+});
+
+test('default preview identifies nlbwmon in the device card', async () => {
+	const { page, context, errors } = await open('/src/preview/index.html?lang=zh-Hans');
+	try {
+		await dashboardReady(page);
+		await page.waitForFunction(() => document.querySelector('.cb-device-rate-note')?.textContent.includes('nlbwmon'));
+		assert.match(await page.textContent('.cb-device-rate-note'), /^设备网速 · nlbwmon · /);
+		assert.deepEqual(errors, []);
 	} finally { await context.close(); }
 });
 
