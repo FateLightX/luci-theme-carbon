@@ -381,6 +381,22 @@ test('Docker uses the whale icon and its pages get their own icons', () => {
 	assert.notEqual(C.icon('nodes'), C.icon('nonexistent'));
 });
 
+test('FlowCone uses a dedicated cone icon without colliding with nearby glyphs', () => {
+	const C = load();
+	assert.equal(C.pageIcon('flowcone', 'network'), 'flowcone');
+	assert.match(C.icon('flowcone'), /M4\.5 4\.5h15/);
+	for (const name of ['route', 'zap', 'fiber', 'ports', 'filter'])
+		assert.notEqual(C.icon('flowcone'), C.icon(name), `flowcone must not reuse ${name}`);
+});
+
+test('HONK uses a dedicated proxy pulse icon without colliding with nearby glyphs', () => {
+	const C = load();
+	assert.equal(C.pageIcon('honk', 'services'), 'honk');
+	assert.match(C.icon('honk'), /M3\.5 12h3/);
+	for (const name of ['send', 'cloud', 'route', 'link', 'fiber'])
+		assert.notEqual(C.icon('honk'), C.icon(name), `honk must not reuse ${name}`);
+});
+
 test('dashboard layout defaults, UCI serialization and attribute round-trip', () => {
 	const C = load();
 	const L = C.dashboardLayout;
