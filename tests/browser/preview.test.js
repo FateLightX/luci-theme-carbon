@@ -354,12 +354,12 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		await page.click(tileToggle);
 		const enterAnims = await page.evaluate(() => document.querySelector('.cb-tile-devices')?.getAnimations().length || 0);
 		assert.ok(enterAnims > 0, 'adding a module triggers an entrance animation');
-		await page.waitForTimeout(280);
+		await page.waitForFunction(() => (document.querySelector('.cb-tile-devices')?.getAnimations().length || 0) === 0, null, { timeout: 2000 });
 		assert.equal(await page.evaluate(() => window.scrollY), scrollAfterPreset, 'toggling a tile keeps exact scroll position');
 		await page.click(tileToggle);
 		const exitGhost = await page.evaluate(() => document.querySelectorAll('.cb-dash-ghosts .cb-card-leaving').length);
 		assert.equal(exitGhost, 1, 'closing a module renders an inert exit ghost animation');
-		await page.waitForTimeout(280);
+		await page.waitForFunction(() => document.querySelectorAll('.cb-dash-ghosts').length === 0, null, { timeout: 2000 });
 		assert.equal(await page.evaluate(() => document.querySelectorAll('.cb-dash-ghosts').length), 0, 'exit ghost layer cleans up after animation');
 		assert.equal(await page.evaluate(() => window.scrollY), scrollAfterPreset, 'untoggling a tile keeps exact scroll position');
 		/* Reset scroll to top before taking the hero/monitor/sheet reference screenshot */
