@@ -232,6 +232,11 @@
 		/* proxy activity: one node on a forwarding pulse */
 		honk: '<path d="M3.5 12h3l2-5 3.5 10 2.5-8 1.8 3h4.2"/>' +
 			'<circle cx="19.5" cy="6" r="1.6"/>',
+		/* processor distributing interrupts to four directions */
+		irqbalance: '<rect x="8" y="7" width="8" height="10" rx="2"/>' +
+			'<circle cx="12" cy="12" r="1.5"/>' +
+			'<path d="M8 10H3.5M5.5 8 3.5 10l2 2M16 10h4.5M18.5 8l2 2-2 2"/>' +
+			'<path d="M8 15H4.5M6.5 13l-2 2 2 2M16 15h3.5M17.5 13l2 2-2 2"/>',
 		send: '<path d="M20.5 3.5L10.2 13.8"/><path d="M20.5 3.5l-6.3 17-4-6.7-6.7-4z"/>',
 		cloud: '<path d="M7.2 18.5h9.8a4 4 0 0 0 .7-7.9 5.6 5.6 0 0 0-10.8-1.2A4.6 4.6 0 0 0 7.2 18.5z"/>',
 		zap: '<path d="M13.2 3L5 13.5h6.2L10.5 21l8.5-10.5h-6.2z"/>',
@@ -287,7 +292,7 @@
 		watchcat: 'eye', diskman: 'disk', 'hd-idle': 'disk', dockerman: 'docker', docker: 'docker',
 		vlmcsd: 'key', ua2f: 'shield', accesscontrol: 'filter', timecontrol: 'clock', p910nd: 'printer',
 		usb_printer: 'printer', alist: 'folder', 'ddns-go': 'refresh', wechatpush: 'bell', serverchan: 'bell',
-		pushbot: 'bell', honk: 'honk'
+		pushbot: 'bell', honk: 'honk', irqbalance: 'irqbalance'
 	};
 	const PAGE_KEYWORDS = [
 		[/plugin|addon|extension/, 'puzzle'], [/theme|argon|design|kucat|skin/, 'palette'],

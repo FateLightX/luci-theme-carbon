@@ -397,6 +397,14 @@ test('HONK uses a dedicated proxy pulse icon without colliding with nearby glyph
 		assert.notEqual(C.icon('honk'), C.icon(name), `honk must not reuse ${name}`);
 });
 
+test('irqbalance uses a dedicated interrupt distribution icon', () => {
+	const C = load();
+	assert.equal(C.pageIcon('irqbalance', 'services'), 'irqbalance');
+	assert.match(C.icon('irqbalance'), /x="8" y="7"/);
+	for (const name of ['cpu', 'pulse', 'nodes', 'route', 'server'])
+		assert.notEqual(C.icon('irqbalance'), C.icon(name), `irqbalance must not reuse ${name}`);
+});
+
 test('dashboard layout defaults, UCI serialization and attribute round-trip', () => {
 	const C = load();
 	const L = C.dashboardLayout;
